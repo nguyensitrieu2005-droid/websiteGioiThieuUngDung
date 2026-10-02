@@ -12,6 +12,32 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 
+// Hàm hỗ trợ chuyển đổi cú pháp MSSQL sang MySQL chuẩn
+function formatSqlQuery(sqlQuery: string): string {
+  let formatted = sqlQuery;
+
+  // 1. Chuyển "SELECT TOP (n)" hoặc "SELECT TOP n" thành LIMIT ở cuối câu
+  const topRegex = /SELECT\s+TOP\s*\(?(\d+)\)?\s+/i;
+  const matchTop = formatted.match(topRegex);
+  if (matchTop) {
+    const limitNum = matchTop[1];
+    // Xóa chữ "TOP n" khỏi câu lệnh SELECT
+    formatted = formatted.replace(topRegex, "SELECT ");
+    // Thêm "LIMIT n" vào cuối câu lệnh (nếu chưa có LIMIT)
+    if (!/LIMIT\s+\d+/i.test(formatted)) {
+      formatted = `${formatted.trim()} LIMIT ${limitNum}`;
+    }
+  }
+
+  // 2. Chuyển đổi tham số @param thành ?
+  formatted = formatted.replace(/@\w+/g, "?");
+
+  // 3. Đổi dấu ngoặc vuông [ColumnName] thành backtick `ColumnName`
+  formatted = formatted.replace(/\[(\w+)\]/g, "`$1`");
+
+  return formatted;
+}
+
 export async function getDb(): Promise<any> {
   return {
     request: function () {
@@ -20,8 +46,7 @@ export async function getDb(): Promise<any> {
           return this;
         },
         query: async (sqlQuery: string) => {
-          // Tự động đổi biến dạng @param của MSSQL thành ? của MySQL nếu có
-          const convertedSql = sqlQuery.replace(/@\w+/g, "?");
+          const convertedSql = formatSqlQuery(sqlQuery);
           const [rows] = await pool.query(convertedSql);
           return { recordset: rows, recordsets: [rows] };
         },
@@ -37,7 +62,7 @@ export async function getDb(): Promise<any> {
             return this;
           },
           query: async (sqlQuery: string) => {
-            const convertedSql = sqlQuery.replace(/@\w+/g, "?");
+            const convertedSql = formatSqlQuery(sqlQuery);
             const [rows] = await pool.query(convertedSql);
             return { recordset: rows, recordsets: [rows] };
           },
@@ -45,7 +70,8 @@ export async function getDb(): Promise<any> {
       },
     }),
     query: async (sqlQuery: string) => {
-      const [rows] = await pool.query(sqlQuery);
+      const convertedSql = formatSqlQuery(sqlQuery);
+      const [rows] = await pool.query(convertedSql);
       return { recordset: rows, recordsets: [rows] };
     },
   };
