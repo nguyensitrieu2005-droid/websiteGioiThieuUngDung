@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import sql from "mssql";
 import { getDb } from "@/lib/db";
 
 export async function GET() {
@@ -60,38 +59,15 @@ export async function POST(request: Request) {
 
     const db = await getDb();
 
-    const result = await db
+    // Loại bỏ kiểu dữ liệu `sql.NVarChar`, `sql.Int` của MSSQL
+    const insertResult = await db
       .request()
-      .input(
-        "Title",
-        sql.NVarChar(255),
-        Title.trim()
-      )
-      .input(
-        "Description",
-        sql.NVarChar(sql.MAX),
-        Description || ""
-      )
-      .input(
-        "Icon",
-        sql.NVarChar(100),
-        Icon || ""
-      )
-      .input(
-        "DisplayOrder",
-        sql.Int,
-        Number(DisplayOrder) || 0
-      )
-      .input(
-        "IsActive",
-        sql.Bit,
-        IsActive ? 1 : 0
-      )
-      .input(
-        "DetailContent",
-        sql.NVarChar(sql.MAX),
-        DetailContent || ""
-      )
+      .input("Title", Title.trim())
+      .input("Description", Description || "")
+      .input("Icon", Icon || "")
+      .input("DisplayOrder", Number(DisplayOrder) || 0)
+      .input("IsActive", IsActive ? 1 : 0)
+      .input("DetailContent", DetailContent || "")
       .query(`
         INSERT INTO Features (
           Title,
@@ -101,7 +77,6 @@ export async function POST(request: Request) {
           IsActive,
           DetailContent
         )
-        OUTPUT INSERTED.*
         VALUES (
           @Title,
           @Description,
@@ -112,9 +87,23 @@ export async function POST(request: Request) {
         )
       `);
 
-    return NextResponse.json(
-      result.recordset[0]
-    );
+    // Lấy ID vừa được tạo tự động từ MySQL
+    const insertedId =
+      insertResult.insertId ||
+      insertResult.recordset?.insertId ||
+      (await db.request().query("SELECT LAST_INSERT_ID() AS Id")).recordset[0]?.Id;
+
+    const newFeature = {
+      Id: insertedId,
+      Title: Title.trim(),
+      Description: Description || "",
+      Icon: Icon || "",
+      DisplayOrder: Number(DisplayOrder) || 0,
+      IsActive: IsActive ? 1 : 0,
+      DetailContent: DetailContent || "",
+    };
+
+    return NextResponse.json(newFeature, { status: 201 });
   } catch (error) {
     console.error("FEATURES POST ERROR:", error);
 

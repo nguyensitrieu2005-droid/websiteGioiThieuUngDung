@@ -31,10 +31,10 @@ export async function GET() {
 
     const steps = stepsResult.recordset;
 
-    const data = processes.map((process) => ({
+    const data = processes.map((process: any) => ({
       ...process,
       Steps: steps.filter(
-        (step) => step.ProcessId === process.Id
+        (step: any) => step.ProcessId === process.Id
       ),
     }));
 
@@ -78,99 +78,96 @@ export async function POST(request: Request) {
 
     const db = await getDb();
 
-    const transaction = db.transaction();
-
-    await transaction.begin();
-
-    try {
-      const processResult = await transaction
-        .request()
-        .input("Title", Title.trim())
-        .input("Description", Description || "")
-        .input(
-          "DisplayOrder",
-          Number.isFinite(Number(DisplayOrder))
-            ? Number(DisplayOrder)
-            : 0
+    // 1. Thêm bản ghi vào bảng Processes (Chuyển cú pháp từ MSSQL OUTPUT sang MySQL)
+    const insertResult = await db
+      .request()
+      .input("Title", Title.trim())
+      .input("Description", Description || "")
+      .input(
+        "DisplayOrder",
+        Number.isFinite(Number(DisplayOrder))
+          ? Number(DisplayOrder)
+          : 0
+      )
+      .input(
+        "IsActive",
+        IsActive === false ? 0 : 1
+      )
+      .query(`
+        INSERT INTO Processes
+        (
+          Title,
+          Description,
+          DisplayOrder,
+          IsActive
         )
-        .input(
-          "IsActive",
-          IsActive === false ? 0 : 1
+        VALUES
+        (
+          @Title,
+          @Description,
+          @DisplayOrder,
+          @IsActive
         )
-        .query(`
-          INSERT INTO Processes
-          (
-            Title,
-            Description,
-            DisplayOrder,
-            IsActive
-          )
-          OUTPUT
-            INSERTED.Id,
-            INSERTED.Title,
-            INSERTED.Description,
-            INSERTED.DisplayOrder,
-            INSERTED.IsActive
-          VALUES
-          (
-            @Title,
-            @Description,
-            @DisplayOrder,
-            @IsActive
-          )
-        `);
+      `);
 
-      const process = processResult.recordset[0];
+    // 2. Lấy ID vừa được tạo tự động trong MySQL
+    const insertedId =
+      insertResult.insertId ||
+      insertResult.recordset?.insertId ||
+      (await db.request().query("SELECT LAST_INSERT_ID() AS Id")).recordset[0]?.Id;
 
-      if (Array.isArray(Steps)) {
-        for (let i = 0; i < Steps.length; i++) {
-          const step = Steps[i];
+    const newProcess = {
+      Id: insertedId,
+      Title: Title.trim(),
+      Description: Description || "",
+      DisplayOrder: Number(DisplayOrder) || 0,
+      IsActive: IsActive === false ? 0 : 1,
+    };
 
-          if (!step.Title || !step.Title.trim()) {
-            continue;
-          }
+    // 3. Chèn danh sách các bước (ProcessSteps) nếu có
+    if (Array.isArray(Steps)) {
+      for (let i = 0; i < Steps.length; i++) {
+        const step = Steps[i];
 
-          await transaction
-            .request()
-            .input("ProcessId", process.Id)
-            .input("StepNumber", i + 1)
-            .input("Title", step.Title.trim())
-            .input(
-              "Description",
-              step.Description || ""
-            )
-            .query(`
-              INSERT INTO ProcessSteps
-              (
-                ProcessId,
-                StepNumber,
-                Title,
-                Description
-              )
-              VALUES
-              (
-                @ProcessId,
-                @StepNumber,
-                @Title,
-                @Description
-              )
-            `);
+        if (!step.Title || !step.Title.trim()) {
+          continue;
         }
+
+        await db
+          .request()
+          .input("ProcessId", newProcess.Id)
+          .input("StepNumber", i + 1)
+          .input("Title", step.Title.trim())
+          .input(
+            "Description",
+            step.Description || ""
+          )
+          .query(`
+            INSERT INTO ProcessSteps
+            (
+              ProcessId,
+              StepNumber,
+              Title,
+              Description
+            )
+            VALUES
+            (
+              @ProcessId,
+              @StepNumber,
+              @Title,
+              @Description
+            )
+          `);
       }
-
-      await transaction.commit();
-
-      return NextResponse.json(
-        {
-          ...process,
-          Steps: Steps || [],
-        },
-        { status: 201 }
-      );
-    } catch (error) {
-      await transaction.rollback();
-      throw error;
     }
+
+    return NextResponse.json(
+      {
+        ...newProcess,
+        Steps: Steps || [],
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("POST /api/processes error:", error);
 

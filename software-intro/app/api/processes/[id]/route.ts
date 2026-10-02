@@ -13,14 +13,11 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-
     const processId = Number(id);
 
     if (!Number.isInteger(processId)) {
       return NextResponse.json(
-        {
-          error: "ID quy trình không hợp lệ",
-        },
+        { error: "ID quy trình không hợp lệ" },
         { status: 400 }
       );
     }
@@ -41,11 +38,9 @@ export async function GET(
         WHERE Id = @Id
       `);
 
-    if (processResult.recordset.length === 0) {
+    if (!processResult.recordset || processResult.recordset.length === 0) {
       return NextResponse.json(
-        {
-          error: "Không tìm thấy quy trình",
-        },
+        { error: "Không tìm thấy quy trình" },
         { status: 404 }
       );
     }
@@ -67,13 +62,10 @@ export async function GET(
 
     return NextResponse.json({
       ...processResult.recordset[0],
-      Steps: stepsResult.recordset,
+      Steps: stepsResult.recordset || [],
     });
   } catch (error) {
-    console.error(
-      "GET /api/processes/[id] error:",
-      error
-    );
+    console.error("GET /api/processes/[id] error:", error);
 
     return NextResponse.json(
       {
@@ -94,20 +86,16 @@ export async function PUT(
 ) {
   try {
     const { id } = await context.params;
-
     const processId = Number(id);
 
     if (!Number.isInteger(processId)) {
       return NextResponse.json(
-        {
-          error: "ID quy trình không hợp lệ",
-        },
+        { error: "ID quy trình không hợp lệ" },
         { status: 400 }
       );
     }
 
     const body = await request.json();
-
     const {
       Title,
       Description,
@@ -118,129 +106,96 @@ export async function PUT(
 
     if (!Title || !Title.trim()) {
       return NextResponse.json(
-        {
-          error: "Tên quy trình không được để trống",
-        },
+        { error: "Tên quy trình không được để trống" },
         { status: 400 }
       );
     }
 
     const db = await getDb();
 
-    const transaction = db.transaction();
+    // 1. Cập nhật bảng Processes (Đã xóa OUTPUT INSERTED)
+    const updateResult = await db
+      .request()
+      .input("Id", processId)
+      .input("Title", Title.trim())
+      .input("Description", Description || "")
+      .input(
+        "DisplayOrder",
+        Number.isFinite(Number(DisplayOrder)) ? Number(DisplayOrder) : 0
+      )
+      .input("IsActive", IsActive === false ? 0 : 1)
+      .query(`
+        UPDATE Processes
+        SET
+          Title = @Title,
+          Description = @Description,
+          DisplayOrder = @DisplayOrder,
+          IsActive = @IsActive
+        WHERE Id = @Id
+      `);
 
-    await transaction.begin();
-
-    try {
-      const processResult = await transaction
-        .request()
-        .input("Id", processId)
-        .input("Title", Title.trim())
-        .input("Description", Description || "")
-        .input(
-          "DisplayOrder",
-          Number.isFinite(Number(DisplayOrder))
-            ? Number(DisplayOrder)
-            : 0
-        )
-        .input(
-          "IsActive",
-          IsActive === false ? 0 : 1
-        )
-        .query(`
-          UPDATE Processes
-          SET
-            Title = @Title,
-            Description = @Description,
-            DisplayOrder = @DisplayOrder,
-            IsActive = @IsActive
-          OUTPUT
-            INSERTED.Id,
-            INSERTED.Title,
-            INSERTED.Description,
-            INSERTED.DisplayOrder,
-            INSERTED.IsActive
-          WHERE Id = @Id
-        `);
-
-      if (processResult.recordset.length === 0) {
-        await transaction.rollback();
-
-        return NextResponse.json(
-          {
-            error: "Không tìm thấy quy trình",
-          },
-          { status: 404 }
-        );
-      }
-
-      /*
-       * Xóa toàn bộ bước cũ
-       * rồi tạo lại theo danh sách mới.
-       *
-       * Cách này đơn giản và phù hợp
-       * với trang Admin hiện tại.
-       */
-
-      await transaction
-        .request()
-        .input("ProcessId", processId)
-        .query(`
-          DELETE FROM ProcessSteps
-          WHERE ProcessId = @ProcessId
-        `);
-
-      if (Array.isArray(Steps)) {
-        for (let i = 0; i < Steps.length; i++) {
-          const step = Steps[i];
-
-          if (!step.Title || !step.Title.trim()) {
-            continue;
-          }
-
-          await transaction
-            .request()
-            .input("ProcessId", processId)
-            .input("StepNumber", i + 1)
-            .input("Title", step.Title.trim())
-            .input(
-              "Description",
-              step.Description || ""
-            )
-            .query(`
-              INSERT INTO ProcessSteps
-              (
-                ProcessId,
-                StepNumber,
-                Title,
-                Description
-              )
-              VALUES
-              (
-                @ProcessId,
-                @StepNumber,
-                @Title,
-                @Description
-              )
-            `);
-        }
-      }
-
-      await transaction.commit();
-
-      return NextResponse.json({
-        ...processResult.recordset[0],
-        Steps: Steps || [],
-      });
-    } catch (error) {
-      await transaction.rollback();
-      throw error;
+    if (updateResult.rowsAffected && updateResult.rowsAffected[0] === 0) {
+      return NextResponse.json(
+        { error: "Không tìm thấy quy trình" },
+        { status: 404 }
+      );
     }
+
+    // 2. Xóa các bước cũ
+    await db
+      .request()
+      .input("ProcessId", processId)
+      .query(`
+        DELETE FROM ProcessSteps
+        WHERE ProcessId = @ProcessId
+      `);
+
+    // 3. Thêm lại các bước mới
+    if (Array.isArray(Steps)) {
+      for (let i = 0; i < Steps.length; i++) {
+        const step = Steps[i];
+
+        if (!step.Title || !step.Title.trim()) {
+          continue;
+        }
+
+        await db
+          .request()
+          .input("ProcessId", processId)
+          .input("StepNumber", i + 1)
+          .input("Title", step.Title.trim())
+          .input("Description", step.Description || "")
+          .query(`
+            INSERT INTO ProcessSteps
+            (
+              ProcessId,
+              StepNumber,
+              Title,
+              Description
+            )
+            VALUES
+            (
+              @ProcessId,
+              @StepNumber,
+              @Title,
+              @Description
+            )
+          `);
+      }
+    }
+
+    const updatedProcess = {
+      Id: processId,
+      Title: Title.trim(),
+      Description: Description || "",
+      DisplayOrder: Number(DisplayOrder) || 0,
+      IsActive: IsActive === false ? 0 : 1,
+      Steps: Steps || [],
+    };
+
+    return NextResponse.json(updatedProcess);
   } catch (error) {
-    console.error(
-      "PUT /api/processes/[id] error:",
-      error
-    );
+    console.error("PUT /api/processes/[id] error:", error);
 
     return NextResponse.json(
       {
@@ -261,73 +216,48 @@ export async function DELETE(
 ) {
   try {
     const { id } = await context.params;
-
     const processId = Number(id);
 
     if (!Number.isInteger(processId)) {
       return NextResponse.json(
-        {
-          error: "ID quy trình không hợp lệ",
-        },
+        { error: "ID quy trình không hợp lệ" },
         { status: 400 }
       );
     }
 
     const db = await getDb();
 
-    const transaction = db.transaction();
+    // 1. Xóa các bước trong ProcessSteps trước
+    await db
+      .request()
+      .input("ProcessId", processId)
+      .query(`
+        DELETE FROM ProcessSteps
+        WHERE ProcessId = @ProcessId
+      `);
 
-    await transaction.begin();
+    // 2. Xóa quy trình chính trong Processes (Đã xóa OUTPUT DELETED)
+    const deleteResult = await db
+      .request()
+      .input("Id", processId)
+      .query(`
+        DELETE FROM Processes
+        WHERE Id = @Id
+      `);
 
-    try {
-      /*
-       * Xóa các bước trước
-       * vì ProcessSteps có khóa ngoại ProcessId.
-       */
-
-      await transaction
-        .request()
-        .input("ProcessId", processId)
-        .query(`
-          DELETE FROM ProcessSteps
-          WHERE ProcessId = @ProcessId
-        `);
-
-      const result = await transaction
-        .request()
-        .input("Id", processId)
-        .query(`
-          DELETE FROM Processes
-          OUTPUT DELETED.Id
-          WHERE Id = @Id
-        `);
-
-      if (result.recordset.length === 0) {
-        await transaction.rollback();
-
-        return NextResponse.json(
-          {
-            error: "Không tìm thấy quy trình",
-          },
-          { status: 404 }
-        );
-      }
-
-      await transaction.commit();
-
-      return NextResponse.json({
-        success: true,
-        message: "Đã xóa quy trình",
-      });
-    } catch (error) {
-      await transaction.rollback();
-      throw error;
+    if (deleteResult.rowsAffected && deleteResult.rowsAffected[0] === 0) {
+      return NextResponse.json(
+        { error: "Không tìm thấy quy trình" },
+        { status: 404 }
+      );
     }
+
+    return NextResponse.json({
+      success: true,
+      message: "Đã xóa quy trình",
+    });
   } catch (error) {
-    console.error(
-      "DELETE /api/processes/[id] error:",
-      error
-    );
+    console.error("DELETE /api/processes/[id] error:", error);
 
     return NextResponse.json(
       {

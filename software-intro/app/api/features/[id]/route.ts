@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import sql from "mssql";
 import { getDb } from "@/lib/db";
 
 type Params = {
@@ -14,7 +13,6 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-
     const featureId = Number(id);
 
     if (!Number.isInteger(featureId) || featureId <= 0) {
@@ -48,43 +46,16 @@ export async function PUT(
 
     const db = await getDb();
 
-    const result = await db
+    // 1. Thực hiện UPDATE dữ liệu (Đã loại bỏ OUTPUT INSERTED)
+    const updateResult = await db
       .request()
-      .input(
-        "Id",
-        sql.Int,
-        featureId
-      )
-      .input(
-        "Title",
-        sql.NVarChar(255),
-        Title.trim()
-      )
-      .input(
-        "Description",
-        sql.NVarChar(sql.MAX),
-        Description || ""
-      )
-      .input(
-        "Icon",
-        sql.NVarChar(100),
-        Icon || ""
-      )
-      .input(
-        "DisplayOrder",
-        sql.Int,
-        Number(DisplayOrder) || 0
-      )
-      .input(
-        "IsActive",
-        sql.Bit,
-        IsActive ? 1 : 0
-      )
-      .input(
-        "DetailContent",
-        sql.NVarChar(sql.MAX),
-        DetailContent || ""
-      )
+      .input("Id", featureId)
+      .input("Title", Title.trim())
+      .input("Description", Description || "")
+      .input("Icon", Icon || "")
+      .input("DisplayOrder", Number(DisplayOrder) || 0)
+      .input("IsActive", IsActive ? 1 : 0)
+      .input("DetailContent", DetailContent || "")
       .query(`
         UPDATE Features
         SET
@@ -94,11 +65,11 @@ export async function PUT(
           DisplayOrder = @DisplayOrder,
           IsActive = @IsActive,
           DetailContent = @DetailContent
-        OUTPUT INSERTED.*
         WHERE Id = @Id
       `);
 
-    if (result.recordset.length === 0) {
+    // Kiểm tra số dòng bị ảnh hưởng
+    if (updateResult.rowsAffected && updateResult.rowsAffected[0] === 0) {
       return NextResponse.json(
         {
           error: "Không tìm thấy chức năng",
@@ -107,9 +78,18 @@ export async function PUT(
       );
     }
 
-    return NextResponse.json(
-      result.recordset[0]
-    );
+    // 2. Trả về đối tượng sau khi đã cập nhật
+    const updatedFeature = {
+      Id: featureId,
+      Title: Title.trim(),
+      Description: Description || "",
+      Icon: Icon || "",
+      DisplayOrder: Number(DisplayOrder) || 0,
+      IsActive: IsActive ? 1 : 0,
+      DetailContent: DetailContent || "",
+    };
+
+    return NextResponse.json(updatedFeature);
   } catch (error) {
     console.error("FEATURE UPDATE ERROR:", error);
 
@@ -132,7 +112,6 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-
     const featureId = Number(id);
 
     if (!Number.isInteger(featureId) || featureId <= 0) {
@@ -146,20 +125,16 @@ export async function DELETE(
 
     const db = await getDb();
 
-    const result = await db
+    // Thực hiện DELETE (Đã loại bỏ OUTPUT DELETED)
+    const deleteResult = await db
       .request()
-      .input(
-        "Id",
-        sql.Int,
-        featureId
-      )
+      .input("Id", featureId)
       .query(`
         DELETE FROM Features
-        OUTPUT DELETED.*
         WHERE Id = @Id
       `);
 
-    if (result.recordset.length === 0) {
+    if (deleteResult.rowsAffected && deleteResult.rowsAffected[0] === 0) {
       return NextResponse.json(
         {
           error: "Không tìm thấy chức năng",
