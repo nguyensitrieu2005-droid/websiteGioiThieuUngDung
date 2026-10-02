@@ -1,25 +1,24 @@
-import sql from "mssql";
+import mysql from "mysql2/promise";
 
-const config: sql.config = {
-  server: process.env.DB_SERVER || "",
+// Khởi tạo Connection Pool kết nối đến Aiven MySQL
+const pool = mysql.createPool({
+  host: process.env.DB_SERVER || "",
+  port: Number(process.env.DB_PORT) || 12144,
   database: process.env.DB_DATABASE || "",
   user: process.env.DB_USER || "",
   password: process.env.DB_PASSWORD || "",
-  options: {
-    encrypt: process.env.DB_ENCRYPT === "true",
-    trustServerCertificate:
-      process.env.DB_TRUST_SERVER_CERTIFICATE === "true",
-  },
-};
+  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : { rejectUnauthorized: false },
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+});
 
-let pool: sql.ConnectionPool | null = null;
-
+/**
+ * Hàm getDb() giữ nguyên tên để không làm hỏng code hiện tại.
+ * Trả về instance của mysql pool.
+ */
 export async function getDb() {
-  if (pool && pool.connected) {
-    return pool;
-  }
-
-  pool = await sql.connect(config);
-
   return pool;
 }
+
+export default pool;

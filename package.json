@@ -1,6 +1,7 @@
 {
   "dependencies": {
-    "mssql": "^12.7.2"
+    "mssql": "^12.7.2",
+    "mysql2": "^3.24.5"
   },
   "devDependencies": {
     "@types/mssql": "^12.3.0"
